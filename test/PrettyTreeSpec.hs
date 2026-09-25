@@ -1,3 +1,16 @@
+-- |
+-- Module      : PrettyTreeSpec
+-- Description : Golden tests for the pretty-printer.
+--
+-- "Grammar.Pretty" turns trees back into infix source-like text, which is
+-- what humans read in logs and result files. Because the exact output is
+-- part of the user-facing contract (and easy to break while touching
+-- precedence or parenthesisation), these are exact-string HUnit assertions.
+--
+-- Two groups: literals on their own, then expressions where the interesting
+-- part is /parenthesisation/ - @5 * (10 - 6)@ vs @(5 * 10) - 6@ must keep
+-- their parentheses in the right places. The larger cases render the
+-- reference trees from "ProblemTrees".
 module PrettyTreeSpec where
 
 import Grammar
@@ -6,12 +19,16 @@ import ProblemTrees
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit
 
+-- | \"Lits\" for atom-level formatting, \"Expressions\" for operators,
+-- lambdas and whole benchmark solutions.
 tests :: [TestTree]
 tests =
   [ testGroup "Lits" testLits,
     testGroup "Expressions" testExpressions
   ]
 
+-- | One case per literal constructor: numbers render bare, characters and
+-- strings use Haskell syntax, lists/tuples use the standard 'show' format.
 testLits :: [TestTree]
 testLits =
   [ testCase "Int" $ pretty (iLitT 5) @?= "5",

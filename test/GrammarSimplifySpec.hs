@@ -2,6 +2,29 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TupleSections #-}
 
+-- |
+-- Module      : GrammarSimplifySpec
+-- Description : The algebraic simplifier must preserve meaning.
+--
+-- "Grammar.Simplify" rewrites trees using algebraic identities (dead-branch
+-- elimination, @x + 0 = x@, @x / x = 1@, list identities, ...). Every such
+-- rewrite is a bet that the new tree means the same thing; this module
+-- checks those bets three ways:
+--
+-- 1. */Equivalence property/* - on random programs, simplification must not
+--    change the evaluation result ('testDoesNotBreak'). Float results are
+--    compared with a tolerance via '(=~=)', because reassociation is not
+--    exact in floating point; NaNs and infinities are treated specially.
+-- 2. */Size property/* - the simplified tree must never be /larger/ than
+--    the original ('testDoesNotGrow'); the label reports roughly how much
+--    of the original size survived.
+-- 3. */Exact unit tests/* - a long list of individual rewrites with the
+--    expected output written down by hand, grouped by the kind of
+--    identity (dead code, boolean algebra, arithmetic, list identities).
+--
+-- The 'FullTree' generator produces a full-grown tree together with inputs
+-- typed for it; its 'QC.shrink' instance simplifies subtrees so a failing
+-- counterexample shrinks toward something small and readable.
 module GrammarSimplifySpec where
 
 import Data.Maybe (isJust)
@@ -15,6 +38,7 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import qualified Test.Tasty.QuickCheck as QC
 
+-- | The two properties (1000 cases each) plus the exact rewrite tests.
 tests :: [TestTree]
 tests =
   [ localOption (QC.QuickCheckTests 1000) $
@@ -29,6 +53,8 @@ tests =
     testGroup "Unit tests" unitTests
   ]
 
+-- | A full-grown tree paired with one literal per program argument, so it
+-- can be evaluated.
 newtype FullTree = FullTree ([Lit], Tree) deriving (Show)
 
 instance QC.Arbitrary FullTree where
@@ -48,6 +74,15 @@ instance QC.Arbitrary FullTree where
         let simpleTrees = simplifyTree <$> subtrees
          in [op <| simpleTrees | simpleTrees /= subtrees]
 
+-- | \"Approximately equals\" for evaluation results:
+--
+-- * floats within 1e-2 (reassociation changes rounding);
+-- * two NaNs or two infinities are equal, mixed ones are discarded;
+-- * pairs and lists compare element-wise;
+-- * everything else is exact equality.
+--
+-- Returning 'QC.Property' (rather than 'Bool') lets this operator chain
+-- with '.&&.' and emit counterexamples.
 (=~=) :: Maybe Lit -> Maybe Lit -> QC.Property
 Just (FloatLit a) =~= Just (FloatLit b) | isInfinite a, isInfinite b = QC.property True
 Just (FloatLit a) =~= Just (FloatLit b) | isNaN a, isNaN b = QC.property True
@@ -57,6 +92,10 @@ Just (PairLit a1 a2) =~= Just (PairLit b1 b2) = Just a1 =~= Just b1 QC..&&. Just
 Just (ListLit x xs) =~= Just (ListLit y ys) | x == y = QC.conjoin $ zipWith (=~=) (Just <$> xs) (Just <$> ys)
 a =~= b = a QC.=== b
 
+-- | Equivalence: if the original tree evaluates at all, the simplified tree
+-- must evaluate to the same value (under '(=~=)'). Premise is expressed
+-- with 'QC.==>' so inputs that fail to evaluate (e.g. division by zero)
+-- are discarded rather than counted as simplifier bugs.
 testDoesNotBreak :: FullTree -> QC.Gen QC.Property
 testDoesNotBreak (FullTree (args, tree)) = do
   let simpleTree = simplifyTree tree
@@ -68,6 +107,10 @@ testDoesNotBreak (FullTree (args, tree)) = do
         )
       $ evaluated =~= evalTree args simpleTree
 
+-- | Size: simplification may keep or shrink the tree, never grow it. The
+-- label buckets each case by the percentage of nodes that survived, which
+-- makes the QuickCheck output a useful picture of how effective the
+-- simplifier is on random programs.
 testDoesNotGrow :: FullTree -> QC.Gen QC.Property
 testDoesNotGrow (FullTree (args, tree)) = do
   let simpleTree = simplifyTree tree
@@ -82,9 +125,15 @@ testDoesNotGrow (FullTree (args, tree)) = do
       | a == b = "100%"
       | otherwise = let c = 10 * a `div` b in concat ["(", show $ c * 10, "%-", show $ (c + 1) * 10, "%("]
 
+-- | Assert that simplifying @subject@ yields exactly @expected@ (no
+-- approximations - these rewrites are meant to be exact).
 simplifiesTo :: Tree -> Tree -> Assertion
 simplifiesTo subject expected = simplifyTree subject @?= expected
 
+-- | The exact rewrite catalogue, grouped by identity kind: dead-code
+-- elimination, skipped evaluation of equal operands, boolean algebra,
+-- arithmetic (including associativity re-association), if/equality
+-- folding, list identities and lambda bodies.
 unitTests :: [TestTree]
 unitTests =
   [ testGroup

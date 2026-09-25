@@ -1,3 +1,25 @@
+-- |
+-- Module      : BenchmarkSpec
+-- Description : Does the operation filter expose the right vocabulary?
+--
+-- 'Benchmark.BenchmarkToConfig.operationsFromTypes' decides which primitives
+-- a problem may use, by looking at the types that are \"relevant\" for that
+-- problem. That choice defines the search space: give a problem too many
+-- operations and the search wanders; too few and no solution exists.
+--
+-- This spec pins that mapping down with exact expected lists, one group per
+-- shape of type environment:
+--
+-- * a single primitive type (int/float/char/bool in isolation);
+-- * two types (which conversion and comparison operators appear);
+-- * all four at once;
+-- * pairs (@fst@/@snd@ become available);
+-- * heterogeneous pairs (only the projections that return the requested
+--   type);
+-- * lists (@length@, @head@, @sum@, ...);
+-- * lambdas (higher-order operators such as @map@ and @filter@), including
+--   QuickCheck properties asserting that lambda-typed operations always
+--   unify with their instantiated argument types.
 module BenchmarkSpec where
 
 import Benchmark.BenchmarkToConfig
@@ -17,6 +39,8 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import qualified Test.Tasty.QuickCheck as QC
 
+-- | The arithmetic/comparison primitives that produce each base type -
+-- the expected baseline before any cross-type operators are added.
 intOps, floatOps, charOps, boolOps :: [Operation]
 intOps = [AddInt, SubInt, MultInt, DivInt, ModInt, MaxInt, MinInt]
 floatOps = [AddFloat, SubFloat, MultFloat, DivFloat, Sqrt]
@@ -30,6 +54,7 @@ getOps GChar = charOps
 getOps GBool = boolOps
 getOps _ = undefined
 
+-- | The test groups described in the module header.
 tests :: [TestTree]
 tests =
   [ testGroup
@@ -108,6 +133,10 @@ tests =
 --   (argTypes, op) <- withRandomSeed $ head sts
 --   if op == desiredOp then return (argTypes, op) else sampleOperation desiredOp $ tail sts
 
+-- | Run the full pipeline under test: filter the operations by
+-- 'relevantTypes', instantiate their argument types, and return every
+-- @(argTypes, operation)@ pair available for @outType@. The assertions then
+-- compare the operation half against a hand-written expected list.
 runTest :: OutputType -> [GType] -> [(ArgTypes, Operation)]
 runTest outType relevantTypes = do
   op <- operationsFromTypes relevantTypes M.! outType

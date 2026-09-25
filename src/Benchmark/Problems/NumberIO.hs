@@ -1,3 +1,14 @@
+-- |
+-- Module      : Benchmark.Problems.NumberIO
+-- Description : Add a floating-point number and an integer.
+--
+-- Given a float and an integer (in that order), produce their sum as a
+-- float - the smallest problem here that mixes two different numeric
+-- input types.
+--
+-- 'floatError' grades it: the answer is continuous, so the absolute
+-- difference between expected and produced value measures how far off
+-- the program is, with no artificial all-or-nothing boundary.
 module Benchmark.Problems.NumberIO (numberIO) where
 
 import Benchmark.Core (Benchmark (..))
@@ -8,6 +19,7 @@ import qualified Data.Set as S
 import Evolution (randomR)
 import Grammar
 
+-- | The benchmark: add the float input to the integer input.
 numberIO :: Benchmark (Sum Float)
 numberIO =
   MkBenchmark

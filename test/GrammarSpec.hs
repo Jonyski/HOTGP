@@ -1,3 +1,23 @@
+-- |
+-- Module      : GrammarSpec
+-- Description : Does the evaluator actually solve the benchmark problems?
+--
+-- The core of the suite: every property takes one of the hand-written
+-- reference trees from "ProblemTrees", feeds it QuickCheck-generated inputs,
+-- and requires the result to match a plain-Haskell solution of the same
+-- problem. This pins down "Grammar.Eval", the literal representation and the
+-- benchmark semantics in one go.
+--
+-- Three sub-groups:
+--
+-- * /Solve Benchmark Problems/ - the reference trees above, one property per
+--   benchmark (numbered like the original Koza/QC papers they come from).
+-- * /Types/ - "GrammarTypesSpec": unification and type checking.
+-- * /Simplification/ - "GrammarSimplifySpec": the rewriter in
+--   "Grammar.Simplify".
+--
+-- A fourth group checks that a lambda which /diverges/ (division by zero)
+-- propagates as 'Nothing' instead of crashing the evaluator.
 module GrammarSpec where
 
 import Data.Bifunctor (Bifunctor (bimap))
@@ -11,6 +31,7 @@ import ProblemTrees
 import Test.Tasty
 import qualified Test.Tasty.QuickCheck as QC
 
+-- | The four groups this module contributes to the top-level tree.
 tests :: [TestTree]
 tests =
   [ testGroup
@@ -21,6 +42,9 @@ tests =
     testGroup "Simplification" SS.tests
   ]
 
+-- | A filter whose predicate divides by zero: evaluating it on any non-empty
+-- integer list must yield 'Nothing' (evaluation failure), never an exception
+-- or a wrong answer. Guards the evaluator's failure channel.
 testFailingLambdas :: [TestTree]
 testFailingLambdas =
   [ QC.testProperty "Filter with failing lambda returns failing tree" testFilter
@@ -32,6 +56,10 @@ testFailingLambdas =
       args <- QC.listOf1 $ QC.arbitrary
       return $ evalTree [ListLit GInt $ map IntLit args] filterTree QC.=== Nothing
 
+-- | One property per reference tree that is currently supported (several
+-- problems from the papers - Collatz, Super Anagrams, X-Word Lines, Pig
+-- Latin - are documented above but not implemented, since they would need
+-- explicit recursion that the grammar does not offer).
 solveBenchmarkTests :: [TestTree]
 solveBenchmarkTests =
   [ testNumberIO,
@@ -54,6 +82,15 @@ solveBenchmarkTests =
     testGrade
   ]
 
+-- | Turn \"evaluate the tree on these inputs\" into a QuickCheck property.
+--
+-- Two failure modes, both reported with a readable counterexample so a
+-- shrinking run tells you exactly which inputs diverged:
+--
+-- * evaluation returned 'Nothing' (an operator failed, e.g. division by
+--   zero) - the property fails outright;
+-- * evaluation returned a value that differs from the expected one - the
+--   property fails and prints expected vs. actual.
 compareSolutions :: [Lit] -> Maybe Lit -> Lit -> QC.Gen QC.Property
 compareSolutions args Nothing expectedSolution =
   return $
