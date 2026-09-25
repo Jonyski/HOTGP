@@ -3,6 +3,8 @@
 module Benchmark.Parse where
 
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Key as K
 import Data.ByteString.Char8 (pack)
 import Data.HashMap.Strict ((!?))
 import Data.Scientific (toRealFloat)
@@ -17,7 +19,7 @@ parseJsonLine :: String -> Object
 parseJsonLine jsonStr = json where Just (Object json) = decodeStrict (pack jsonStr)
 
 defaultOutputParser :: OutputType -> OutputParser
-defaultOutputParser gType json = parseJsonLit gType val where Just val = json !? "output1"
+defaultOutputParser gType json = parseJsonLit gType val where Just val = KM.lookup (K.fromString "output1") json
 
 parseJsonLit :: OutputType -> Value -> Lit
 parseJsonLit GInt (Number sci) = IntLit $ round $ toRealFloat sci
@@ -29,4 +31,4 @@ parseJsonLit (GList gt) (Array vec) = ListLit gt $ toList $ fmap (parseJsonLit g
 parseJsonLit typ val = error $ unwords ["Could not parse", pretty typ, "from", show val]
 
 (^.) :: Object -> String -> Value
-(^.) json key = let Just val = json !? T.pack key in val
+(^.) json key = let Just val = KM.lookup (K.fromString key) json in val

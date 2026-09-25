@@ -1,6 +1,6 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.0.
+-- This file has been generated from package.yaml by hpack version 0.37.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -10,7 +10,7 @@ description:    Please see the README on GitHub at <https://github.com/mcf1110/h
 homepage:       https://github.com/mcf1110/hotgp#readme
 bug-reports:    https://github.com/mcf1110/hotgp/issues
 author:         Matheus Fernandes
-maintainer:     example@example.com
+maintainer:     mcf1110
 copyright:      2023 Matheus Fernandes
 license:        BSD3
 license-file:   LICENSE

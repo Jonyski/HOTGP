@@ -8,6 +8,8 @@ import Benchmark
 import Benchmark.Dataset
 import Benchmark.Log
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Key as K
 import Data.Bifunctor (Bifunctor (bimap))
 import Data.Foldable (minimumBy)
 import Data.Function (on)
@@ -31,8 +33,8 @@ pruneFile :: FilePath -> IO ()
 pruneFile fileName = do
   putStrLn fileName
   Just (Object content) <- decodeFileStrict ("input-prune/" <> fileName) :: (IO (Maybe Value))
-  let Just (String showTree) = content !? "showTree"
-      Just (String datasetNameText) = content !? "datasetName"
+  let Just (String showTree) = KM.lookup (K.fromString "showTree") content
+      Just (String datasetNameText) = KM.lookup (K.fromString "datasetName") content
       datasetName = unpack datasetNameText
       tree = resetMeasure $ read $ unpack showTree
 

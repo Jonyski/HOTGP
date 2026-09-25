@@ -13,9 +13,9 @@ data Individual a where
 
 type SortedPop a = SL.SortedList (Individual a)
 
-deriving instance (Fitness a => Show (Individual a))
+deriving instance Fitness a => Show (Individual a)
 
-deriving instance (Fitness a => Read (Individual a))
+deriving instance Fitness a => Read (Individual a)
 
 instance Eq (Individual a) where
   i1 == i2 = _indTree i1 == _indTree i2
