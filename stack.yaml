@@ -30,6 +30,18 @@ resolver: lts-18.18
 #   - wai
 packages:
     - .
+# Dependency packages pulled from upstream, because they are not in the
+# lts-18.18 resolver (which still ships aeson-1.5.6.0, without the
+# Data.Aeson.KeyMap / Data.Aeson.Key modules used by this code base).
+# aeson-2.x drags a few of its own minimum versions along with it.
+extra-deps:
+    - aeson-2.0.3.0
+    - OneTuple-0.3.1@sha256:fc32cb744477befa450a538ea4975cc523f0a2f1585cb5a36e9936a3d18e9a3c,2276
+    - attoparsec-0.14.4@sha256:35129d0ab1741f000f1a7d2fc839544919ee6fbb8f2d6e7f0a629c41f91035f3,5914
+    - hashable-1.3.5.0
+    - semialign-1.2.0.1@sha256:ee3468e349e72ec0a604ae05573a4de7181d97d10366254244a0cca8a76d6c35,2852
+    - text-short-0.1.5
+    - time-compat-1.9.6
 # Dependency packages to be pulled from upstream that are not in the resolver.
 # These entries can reference officially published versions as well as
 # forks / in-progress versions pinned to a git hash. For example:
