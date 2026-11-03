@@ -1,4 +1,4 @@
-# UNDERSTAND_THE_CODE — Guia completo do HOTGP
+# ENTENDA O CÓDIGO — Guia completo do HOTGP
 
 > **HOTGP — Higher-Order Typed Genetic Programming**
 > Sistema de Programação Genética em Haskell que evolui programas funcionais
