@@ -24,7 +24,7 @@ module Evolution.Crossover where
 import Data.Foldable (Foldable (foldl'))
 import Evolution.Config (Config (_maxTreeDepth, _programType))
 import Evolution.Core (Point, St)
-import Evolution.Helpers (atPoint, randomR, sample)
+import Evolution.Helpers (atPointMeasured, randomR, sample)
 import Grammar
   ( FunctionType (_argTypes),
     GType,
@@ -105,6 +105,8 @@ crossOver cfg t1 t2 = do
     m -> do
       -- Step 5: pick a partner uniformly and swap both ways.
       (p2, b2) <- sample m
-      c1 <- atPoint p1 (const $ return b2) t1
-      c2 <- atPoint p2 (const $ return b1) t2
+      -- The splice rebases b2/b1 at their new depth and repairs the
+      -- ancestors' measures, so the children come out already measured.
+      c1 <- atPointMeasured p1 (const $ return b2) t1
+      c2 <- atPointMeasured p2 (const $ return b1) t2
       return $ Just (c1, c2)

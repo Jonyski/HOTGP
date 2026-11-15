@@ -18,7 +18,15 @@ module Evolution.Helpers where
 import qualified Control.Monad.State.Strict as S
 import qualified Data.Vector as V
 import Evolution.Core (Mutation, Point, St)
-import Grammar (Tree (..), getNodeCount)
+import Grammar
+  ( Measure (_currentDepth, _height, _nodeCount),
+    Tree (..),
+    computeMeasure,
+    getHeight,
+    getMeasure,
+    getNodeCount,
+    rebaseMeasure,
+  )
 import qualified System.Random as R
 
 -- | Selects a random value from a uniform type.
@@ -93,6 +101,67 @@ atPoint point f t@(Node measure v ch)
         else (: ts) <$> atPoint p f t -- it is in this child, lets search for it
       where
         n = getNodeCount t
+
+-- | 'atRandomPoint' with a measure-correct splice (see 'atPointMeasured').
+atRandomPointMeasured :: Mutation -> Mutation
+atRandomPointMeasured f tree = do
+  let n = getNodeCount tree
+  point <- randomR (1, n)
+  atPointMeasured point f tree
+
+-- | 'atPoint' that keeps the measure cache valid, so the caller does not
+-- have to re-measure the whole tree afterwards.
+--
+-- A splice changes two things:
+--
+-- * the inserted subtree now lives at a different depth, so its
+--   @\_currentDepth@ values are rebased ('rebaseMeasure'); and
+-- * every ancestor on the path to it changes height/node count, so those
+--   values are recomputed bottom-up from the children's cached measures.
+--
+-- The result is exactly the tree 'computeMeasure' would have produced for
+-- the spliced structure, at a cost proportional to the inserted subtree
+-- plus the path - instead of a full re-traversal of a tree that can hold
+-- tens of thousands of nodes.
+--
+-- If the input tree has no measure at all (freshly generated, or built by
+-- hand in tests), this falls back to the straightforward
+-- @computeMeasure . atPoint@ path, which is still correct.
+atPointMeasured :: Point -> Mutation -> Mutation
+atPointMeasured point f tree = case _measure tree of
+  Nothing -> computeMeasure <$> atPoint point f tree
+  Just _ -> go f 0 point tree
+  where
+    -- The depth is threaded down from the root, so no cached depth has to
+    -- be trusted for the path being rebuilt.
+    go :: Mutation -> Int -> Point -> Tree -> St Tree
+    go mut depth p t@Leaf {} = rebaseMeasure depth <$> mut t
+    go mut depth p t@Node {_args = ch}
+      | p <= 1 = rebaseMeasure depth <$> mut t
+      | otherwise = do
+          ch' <- changeChildren mut (depth + 1) (p - 1) ch
+          return $ withMeasure depth (t {_args = ch'})
+
+    changeChildren :: Mutation -> Int -> Point -> [Tree] -> St [Tree]
+    changeChildren _ _ _ [] = return []
+    changeChildren mut d p (t : ts) =
+      if getNodeCount t < p
+        then (t :) <$> changeChildren mut d (p - getNodeCount t) ts
+        else (: ts) <$> go mut d p t
+
+    withMeasure :: Int -> Tree -> Tree
+    withMeasure d n@Node {_args = ts} =
+      let old = getMeasure n
+       in n
+            { _measure =
+                Just
+                  old
+                    { _currentDepth = d,
+                      _height = 1 + maximum (getHeight <$> ts),
+                      _nodeCount = 1 + sum (getNodeCount <$> ts)
+                    }
+            }
+    withMeasure _ n = n
 
 -- | Unwraps a pair into a two-element list (used to feed crossover results
 -- back into @mapM@-style code).

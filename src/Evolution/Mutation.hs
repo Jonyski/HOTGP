@@ -27,7 +27,7 @@ import Evolution.Config
   )
 import Evolution.Core (Mutation)
 import Evolution.Generate (grow)
-import Evolution.Helpers (atRandomPoint)
+import Evolution.Helpers (atRandomPointMeasured)
 import Grammar
 import Pretty
 import qualified System.Random as R
@@ -55,4 +55,4 @@ replaceSubtree config tree =
 
 -- | Randomly selects a node and replaces it with a new subtree that returns the same type as the deleted one.
 mutate :: Ord a => Config a -> Mutation
-mutate cfg = atRandomPoint (replaceSubtree cfg)
+mutate cfg = atRandomPointMeasured (replaceSubtree cfg)

@@ -47,7 +47,7 @@ import Evolution.Generate (ramped)
 import Evolution.Helpers (hoistState, randomR, tupleToList)
 import Evolution.Individual
 import Evolution.Mutation (mutate)
-import Grammar (FunctionType (_argTypes), Tree, computeMeasure, getHeight)
+import Grammar (FunctionType (_argTypes), Tree, getHeight)
 import Pretty (Pretty (pretty))
 import System.IO (hFlush, stdout)
 import System.Random.Internal (StdGen)
@@ -82,6 +82,8 @@ runAndLog cfg loggingFunction checkpointFilename = do
     then resumeFromCheckpoint
     else startFromScratch
   where
+    -- Computed once and reused by every step (see 'rankWeights').
+    weights = rankWeights cfg
     checkpointEvery = 1000
     resumeFromCheckpoint = do
       S.liftIO $ putStrLn "LOADING CHECKPOINT"
@@ -107,7 +109,7 @@ runAndLog cfg loggingFunction checkpointFilename = do
         S.liftIO $ putStrLn ":: CHECKPOINT ::"
         saveCheckpoint checkpointFilename nEvals pop
 
-      (innerNEvals, newPop) <- hoistState $ steadyStateReplace cfg pop
+      (innerNEvals, newPop) <- hoistState $ steadyStateReplaceWith weights cfg pop
       let totalNEvals = innerNEvals + nEvals
           pct :: Float
           pct = 100.0 * fromIntegral totalNEvals / fromIntegral (_nEvaluations cfg)
@@ -133,14 +135,14 @@ runAndLog cfg loggingFunction checkpointFilename = do
 runEvolution :: (Fitness a) => Config a -> St (SortedPop a)
 runEvolution cfg = do
   p <- initPop cfg
-  go (length p) p
+  go (rankWeights cfg) (length p) p
   where
-    go nEvals pop = do
-      (innerNEvals, newPop) <- steadyStateReplace cfg pop
+    go weights nEvals pop = do
+      (innerNEvals, newPop) <- steadyStateReplaceWith weights cfg pop
       let totalNEvals = innerNEvals + nEvals
       if totalNEvals >= _nEvaluations cfg
         then return newPop
-        else go totalNEvals newPop
+        else go weights totalNEvals newPop
 
 -- | Creates the initial population with the config.
 --
@@ -152,8 +154,7 @@ initPop cfg = SL.toSortedList . map (mkIndividual cfg) <$> ramped cfg
 -- | Runs the step of the evolution, known as Steady State Replace.
 --
 -- One step, in order:
---
--- 1. rank the population exponentially by fitness ('exponentialRank') and
+--  -- 1. rank the population exponentially by fitness ('rankWeights') and
 --    sample _individualsPerStep_ parents, so better individuals breed more
 --    often;
 -- 2. pair them up and apply crossover with probability _crossoverRate_
@@ -168,8 +169,17 @@ initPop cfg = SL.toSortedList . map (mkIndividual cfg) <$> ramped cfg
 -- Returns the number of evaluations the step consumed and the new
 -- population.
 steadyStateReplace :: (Fitness a) => Config a -> SortedPop a -> St (Evaluations, SortedPop a)
-steadyStateReplace cfg pop = do
-  let rankedPop = exponentialRank cfg pop
+steadyStateReplace cfg = steadyStateReplaceWith (rankWeights cfg) cfg
+
+-- | 'steadyStateReplace' with the rank weights supplied by the caller.
+--
+-- The weights depend only on 'Evolution.Config._parentScalar', so a run
+-- computes them once ('rankWeights') and reuses them for every step instead
+-- of recomputing the @scalar ** rank@ list, which costs one @exp@ and one
+-- @log@ per rank per step.
+steadyStateReplaceWith :: (Fitness a) => [Double] -> Config a -> SortedPop a -> St (Evaluations, SortedPop a)
+steadyStateReplaceWith weights cfg pop = do
+  let rankedPop = zip (SL.fromSortedList pop) weights
   parents <- inPairs . map _indTree <$> sampleManyWithProb (_individualsPerStep cfg) rankedPop
   children <- concat <$> mapM (doCrossover cfg) parents
   xMen <- mapM (doMutation cfg) children
@@ -177,7 +187,9 @@ steadyStateReplace cfg pop = do
   let popTrees = map _indTree $ SL.fromSortedList pop
       withoutDuplication = filter (`notElem` popTrees) xMen
       evaluations = length children -- withoutDuplication
-      newPop = keepBest cfg pop $ mkIndividual cfg <$> withoutDuplication
+      scored = mkMeasuredIndividual cfg <$> withoutDuplication
+      -- The operators keep the measure cache valid, so no re-measuring here.
+      newPop = keepBest cfg pop scored
   return (evaluations, newPop)
 
 -- | Given a probability, runs an action or uses a fallback.
@@ -197,11 +209,12 @@ tossCoin prob fallback action = do
 -- pair is passed through unchanged (and therefore costs no evaluation - the
 -- caller only scores what actually came back as new trees).
 --
--- 'computeMeasure' is applied to the results because a spliced subtree
--- invalidates the depth/height cache of every ancestor.
+-- No re-measuring is needed here: 'Evolution.Crossover.crossOver' splices
+-- with 'atPointMeasured', which keeps the depth/height cache of the
+-- children valid.
 doCrossover :: Config a -> (Tree, Tree) -> St [Tree]
 doCrossover cfg parents =
-  tossCoin (_crossoverRate cfg) (tupleToList parents) $ maybe [] (map computeMeasure . tupleToList) <$> uncurry (crossOver cfg) parents
+  tossCoin (_crossoverRate cfg) (tupleToList parents) $ maybe [] tupleToList <$> uncurry (crossOver cfg) parents
 
 -- | Tosses a coin and applies the mutation.
 --
@@ -218,8 +231,8 @@ doMutation cfg tree = tossCoin (1 - _crossoverRate cfg) tree $ mutate cfg tree
 -- 'sampleManyWithProb'. This is fitness-proportionate selection expressed
 -- through ranks, which is robust to fitnesses of wildly different scales
 -- (only the order matters).
-exponentialRank :: Config a -> SortedPop a -> [(Individual a, Double)]
-exponentialRank cfg ps = zip (SL.fromSortedList ps) $ (_parentScalar cfg **) <$> [0 ..]
+rankWeights :: Config a -> [Double]
+rankWeights cfg = (_parentScalar cfg **) <$> [0 ..]
 
 -- * Survivor selection strategies
 

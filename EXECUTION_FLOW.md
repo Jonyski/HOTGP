@@ -1015,18 +1015,27 @@ esse cache são as transformações de forma:
 | Operação | O que acontece com as medidas |
 |---|---|
 | gerar (`buildTree`) | nós nascem com `Nothing` |
-| `mkIndividual` | `computeMeasure` antes de pontuar |
-| crossover | `computeMeasure` nos dois filhos (obrigatório: ver §6.3) |
-| mutação | ancestrais ficam com medida **velha**; o novo subtree nasce sem medida; `mkIndividual` conserta antes de pontuar |
-| ler checkpoint | medidas vêm do arquivo; `mkIndividual` recalcula |
+| `mkIndividual` | `computeMeasure` antes de pontuar (só na população inicial e ao ler checkpoint) |
+| crossover | `atPointMeasured` enxerta rebaseando a profundidade e refazendo só os ancestrais do caminho |
+| mutação | idem, via `atRandomPointMeasured`: o filho já sai medido |
+| filho já medido | `mkMeasuredIndividual` pontua **sem** remedir |
+| ler checkpoint | medidas vêm do arquivo |
 | `prune` | `resetMeasure` ao ler; `computeMeasure` ao terminar |
 
-🔎 **Leitura fina — por que o crossover mede os filhos?** Porque a **mutação
-vem logo depois** e usa `getCurrentDepth` do nó sorteado para calcular o
-orçamento de profundidade. Sem `computeMeasure`, todo nó de uma árvore recém
-transplantada reportaria `currentDepth = 0` (a medida seria calculada tratando
-aquele nó como raiz), e a mutação geraria subtree grande demais perto do fundo.
-Esse é o motivo do `map computeMeasure . tupleToList` em `doCrossover`.
+🔎 **Leitura fina — o cache agora é mantido, não consertado depois.**
+A versão original deixava as medidas dos ancestrais velhas em cada enxerto e
+pagava uma travessia completa por filho para consertar (`computeMeasure` em
+`doCrossover` e outra em `mkIndividual`). Hoje o enxerto
+([src/Evolution/Helpers.hs](src/Evolution/Helpers.hs), `atPointMeasured`) sabe
+a profundidade em que está inserindo: reancora a subárvore transplantada
+(`rebaseMeasure`, que só desloca `_currentDepth` e reaproveita altura/contagem)
+e recalcula `_height`/`_nodeCount` de cada ancestral a partir dos filhos já
+medidos. O custo vira *subárvore + caminho* em vez de *árvore inteira*, e o
+filho chega medido em `mkMeasuredIndividual`.
+
+Isso também conserta um efeito colateral: `Eq` de `Tree` é derivado e compara o
+cache, então um filho com medida velha praticamente nunca era igual a um
+indivíduo da população — a deduplicação (§6.5) não filtrava quase nada.
 
 ---
 
@@ -1036,15 +1045,16 @@ Esse é o motivo do `map computeMeasure . tupleToList` em `doCrossover`.
 Este é o coração da busca. Ele roda ~149.500 vezes.
 
 ```haskell
-steadyStateReplace cfg pop = do
-  let rankedPop = exponentialRank cfg pop
+steadyStateReplaceWith weights cfg pop = do
+  let rankedPop = zip (SL.fromSortedList pop) weights  -- pesos calculados uma vez por corrida
   parents  <- inPairs . map _indTree <$> sampleManyWithProb (_individualsPerStep cfg) rankedPop
   children <- concat <$> mapM (doCrossover cfg) parents
   xMen     <- mapM (doMutation cfg) children
   let popTrees = map _indTree $ SL.fromSortedList pop
       withoutDuplication = filter (`notElem` popTrees) xMen
       evaluations = length children
-      newPop = keepBest cfg pop (mkIndividual cfg <$> withoutDuplication)
+      scored   = mkMeasuredIndividual cfg <$> withoutDuplication  -- já vêm medidos
+      newPop   = keepBest cfg pop scored
   return (evaluations, newPop)
 ```
 
@@ -1054,8 +1064,15 @@ sobreviver**. Cada etapa consome o RNG na ordem em que aparece. Vamos uma a uma.
 ### 6.1 Seleção: rank exponencial + roleta
 
 ```haskell
-exponentialRank cfg ps = zip (SL.fromSortedList ps) $ (_parentScalar cfg **) <$> [0 ..]
+rankWeights cfg = (_parentScalar cfg **) <$> [0 ..]   -- uma vez por corrida
+-- por passo:
+rankedPop = zip (SL.fromSortedList pop) weights
 ```
+
+A lista de pesos só depende de `_parentScalar`, então é calculada **uma vez**
+(`rankWeights`, avaliada de forma preguiçosa) e reaproveitada em todos os
+passos. Antes ela era refeita a cada passo — 1000 chamadas de `(**)` (um `exp`
+mais um `log` cada) só para sortear 2 pais.
 
 A população já está ordenada (melhor primeiro). O rank `i` (0-based) recebe
 peso `0.9993 ** i`:
@@ -1119,8 +1136,11 @@ pais, dá **um par por passo**.
 ```haskell
 doCrossover cfg parents =
   tossCoin (_crossoverRate cfg) (tupleToList parents) $
-    maybe [] (map computeMeasure . tupleToList) <$> uncurry (crossOver cfg) parents
+    maybe [] tupleToList <$> uncurry (crossOver cfg) parents
 ```
+
+Não há `computeMeasure` aqui: `crossOver` enxerta com `atPointMeasured`, que
+devolve os dois filhos já medidos (ver §5.3).
 
 Primeiro, o **cara-ou-coroa**:
 
@@ -1278,23 +1298,24 @@ withoutDuplication = filter (`notElem` popTrees) xMen
 ```
 
 A intenção é clara: filhos que já existem na população não precisam ser
-avaliados de novo. Mas há uma sutileza.
+avaliados de novo.
 
 🔎 **Leitura fina — `Eq Tree` inclui o cache de medidas.** `Tree` deriva `Eq`
-e carrega `_measure :: Maybe Measure`. Então duas árvores com a **mesma forma**
-mas medidas diferentes **não são iguais** para `notElem`. Na prática:
+e carrega `_measure :: Maybe Measure`. Duas árvores com a **mesma forma** só
+são iguais para `notElem` se as medidas também coincidirem. Na versão original
+isso enfraquecia a deduplicação:
 
-- **pais que passaram direto** (crossover não sorteado e mutação não sorteada)
-  têm exatamente as mesmas medidas da população → são filtrados (custo 0);
-- **filhos de crossover** recebem `computeMeasure` → podem coincidir
+- **pais que passaram direto** (crossover e mutação não sorteados) tinham
+  exatamente as medidas da população → filtrados (custo 0);
+- **filhos de crossover** recebiam `computeMeasure` → podiam coincidir
   exatamente com um indivíduo existente → filtrados;
-- **filhos mutados** têm ancestrais com medida **velha** e o novo subtree sem
-  medida → praticamente nunca são iguais a um membro medido da população, mesmo
-  que a forma coincida.
+- **filhos mutados** ficavam com ancestrais de medida **velha** → praticamente
+  nunca eram iguais a um membro medido da população, mesmo com a mesma forma.
 
-Ou seja, a deduplicação é **mais fraca** do que o comentário sugere. Não é um
-bug de correção (a população continua válida), mas explica por que o número de
-avaliações "reais" não bate com o contador.
+Agora todo filho sai dos operadores com o cache correto (§5.3), então a
+deduplicação volta a filtrar de verdade — inclusive os mutados. Vale saber
+disso ao comparar corridas antigas com novas: o filtro passou a ter efeito, e
+por isso a trajetória (e o RNG) diverge da versão anterior.
 
 ### 6.6 Sobrevivência — `keepBest` e elitismo
 
@@ -1733,7 +1754,7 @@ Main.main
                       └─ go nEvals pop
                            ├─ (nEvals mod 1000 == 0) saveCheckpoint
                            ├─ steadyStateReplace
-                           │    ├─ exponentialRank (0.9993^rank)
+                           │    ├─ rankWeights (0.9993^rank, uma vez) + zip
                            │    ├─ sampleManyWithProb (roleta)
                            │    ├─ inPairs
                            │    ├─ doCrossover (0.5)
@@ -1975,10 +1996,11 @@ schemes:
 | como a fitness é calculada | `BenchmarkToConfig.fitness`, `Benchmark.Helpers.Result` |
 | como árvores tipadas são geradas | `SamplerTable.buildTable`, `buildTree`, `instantiateArgs` |
 | como a população inicial nasce | `Generate.ramped`, `full`, `grow` |
-| como um indivíduo é medido/pontuado | `Individual.mkIndividual`, `Grammar.Helpers.computeMeasure` |
+| como um indivíduo é medido/pontuado | `Individual.mkIndividual` / `mkMeasuredIndividual`, `Grammar.Helpers.computeMeasure` |
+| como os enxertos mantêm o cache de medidas | `Evolution.Helpers.atPointMeasured`, `Grammar.Helpers.rebaseMeasure` |
 | como um programa é executado | `Grammar.Eval.evalTree`, `eval`, `evalLambda` |
 | como um passo evolutivo funciona | `Run.steadyStateReplace` |
-| como os pais são escolhidos | `Run.exponentialRank`, `sampleManyWithProb` |
+| como os pais são escolhidos | `Run.rankWeights`, `sampleManyWithProb` |
 | como o crossover funciona | `Crossover.crossOver`, `getAllMatchingSubtrees`, `getBranchAt` |
 | como a mutação funciona | `Mutation.mutate`, `replaceSubtree`, `Helpers.atPoint` |
 | como os sobreviventes são escolhidos | `Run.keepBest`, `Individual.Ord` |

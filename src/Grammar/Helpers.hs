@@ -136,7 +136,17 @@ getCurrentDepth = _currentDepth . getMeasure
 -- Call this after building or mutating a tree and before relying on any of
 -- the getters above.
 computeMeasure :: Tree -> Tree
-computeMeasure = go 0
+computeMeasure = computeMeasureFrom 0
+
+-- | 'computeMeasure' for a subtree that does not start at the root.
+--
+-- The first node is annotated with the given depth, and its descendants
+-- with @depth + k@ where @k@ is how many levels below it they sit. This is
+-- what lets the genetic operators re-measure just the piece they spliced
+-- in, at the depth where it now lives, instead of re-measuring the whole
+-- tree.
+computeMeasureFrom :: Int -> Tree -> Tree
+computeMeasureFrom = go
   where
     go currentDepth l@Leaf {} =
       l
@@ -157,6 +167,28 @@ computeMeasure = go 0
             { _currentDepth = currentDepth,
               _height = 1 + maximum (getHeight <$> newTrees),
               _nodeCount = 1 + sum (getNodeCount <$> newTrees)
+            }
+
+-- | Places an already-built subtree at the given depth, keeping its
+-- cached height/node count and only fixing the depths.
+--
+-- A subtree's height and node count do not depend on where it sits, so
+-- moving it only needs a depth shift. If any node of the subtree has no
+-- cached measure yet (a freshly generated tree, say), that node is fully
+-- measured instead, at the right depth.
+rebaseMeasure :: Int -> Tree -> Tree
+rebaseMeasure depth t = case _measure t of
+  Nothing -> computeMeasureFrom depth t
+  Just _ -> go depth t
+  where
+    go d n = case _measure n of
+      Nothing -> computeMeasureFrom d n
+      Just m -> case n of
+        Leaf {} -> n {_measure = Just m {_currentDepth = d}}
+        Node {_args = ts} ->
+          n
+            { _measure = Just m {_currentDepth = d},
+              _args = go (d + 1) <$> ts
             }
 
 -- | Drops the cached measure everywhere, forcing a recompute later.

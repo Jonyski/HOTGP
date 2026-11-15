@@ -64,10 +64,23 @@ bestIndividual = head . SL.fromSortedList
 
 -- | Scores a tree with the config's fitness function.
 --
--- Also calls 'computeMeasure' first, so the stored tree always carries a
--- valid measure cache - everything downstream (depth checks, tie-breaking,
--- logging) can rely on it.
+-- Also guarantees the stored tree carries a valid measure cache -
+-- everything downstream (depth checks, tie-breaking, logging) relies on
+-- it. Trees coming out of the genetic operators are already measured (they
+-- splice with 'Evolution.Helpers.atPointMeasured'), so the full
+-- re-traversal is only paid for trees that have no measure yet, e.g. the
+-- initial population.
 mkIndividual :: (Fitness a) => Config a -> Tree -> Individual a
 mkIndividual config tree = MkIndividual computedTree (_fitnessFunction config computedTree)
   where
     computedTree = computeMeasure tree
+
+-- | Like 'mkIndividual', for a tree that already carries a valid measure.
+--
+-- The genetic operators splice with 'Evolution.Helpers.atPointMeasured', so
+-- their children come out fully annotated; re-annotating them again would be
+-- a redundant traversal of the whole program (it was one of the most
+-- expensive steps of the loop). Only use this for trees produced by those
+-- operators.
+mkMeasuredIndividual :: (Fitness a) => Config a -> Tree -> Individual a
+mkMeasuredIndividual config tree = MkIndividual tree (_fitnessFunction config tree)
