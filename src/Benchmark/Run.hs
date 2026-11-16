@@ -22,6 +22,7 @@ import Benchmark.BenchmarkToConfig (makeConfig)
 import Benchmark.Core
 import Benchmark.Dataset
 import Benchmark.Download (csvDirs, downloadBenchmark)
+import Benchmark.Gpu (Backend (..), BatchScorer (..), BatchStats (..), mkBatchScorer)
 import Benchmark.Helpers
 import Benchmark.Log
 import Control.Monad (unless, when)
@@ -43,13 +44,33 @@ import Pretty
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, removeFile)
 import System.IO
 import System.Random (mkStdGen)
+import Text.Printf (printf)
 
 -- | Runs one benchmark to completion and writes its outputs.
 --
 -- @workDir@ is where datasets, logs and checkpoints live; @seed@ selects
 -- the random stream; @benchmark@ describes the problem.
+--
+-- This is the serial path: the initial population is scored one tree at a
+-- time, exactly as the steady-state loop scores its children.
 runBenchmark :: (Fitness a, Monoid a, Show a) => FilePath -> Int -> Benchmark a -> IO ()
-runBenchmark workDir seed benchmark = do
+runBenchmark = runBenchmarkWith Nothing
+
+-- | 'runBenchmark' with a chosen scoring backend for the
+-- /initial population/.
+--
+-- Passing 'Just' a backend replaces the per-tree scoring of the @popSize@
+-- freshly generated programs with one batched evaluation (see
+-- "Benchmark.Gpu"). Nothing else about the run changes: the same trees are
+-- generated from the same seed and the fitnesses are computed by the same
+-- aggregation, so the search itself is identical - only the measurement is
+-- faster (or slower, for problems outside the scalar subset).
+--
+-- The steady-state loop keeps scoring its two children per step serially,
+-- because a batch of two is far too small to be worth a kernel launch. See
+-- @GPU.md@ for the numbers behind that decision.
+runBenchmarkWith :: (Fitness a, Monoid a, Show a) => Maybe Backend -> FilePath -> Int -> Benchmark a -> IO ()
+runBenchmarkWith backend workDir seed benchmark = do
   hSetBuffering stdout $ BlockBuffering Nothing
   identifier <- logFileIdentifier benchmark seed
   (logFileHandle, finalResultFile, jsonFile) <- prepareLogFiles identifier workDir benchmark
@@ -66,7 +87,26 @@ runBenchmark workDir seed benchmark = do
         when (evals `mod` 100 == 0) $ hFlush logFileHandle
         return newCache
 
-  (finalPop, nEvals) <- evalStateT (runAndLog cfg logToFile checkpoint) $ mkStdGen seed
+  -- One scorer per run: it flattens each tree once, keeps the CUDA runner
+  -- process invocation out of the tree loop, and accumulates the statistics
+  -- reported below.
+  batch <- traverse (\b -> mkBatchScorer b benchmark trainSet) backend
+  let scorer cfg' trees = case batch of
+        Nothing -> serialScorer cfg' trees
+        Just bs -> do
+          individuals <- _scoreTrees bs trees
+          stats <- _scorerStats bs
+          printf
+            "batch scoring on %s: %d trees (%d flattenable, %.1f%%), %d case evaluations\n"
+            (show (_scorerBackend bs))
+            (_statTrees stats)
+            (_statEligible stats)
+            (100 * fromIntegral (_statEligible stats) / fromIntegral (max 1 (_statTrees stats)) :: Double)
+            (_statBatchEvaluations stats)
+          hFlush stdout
+          return individuals
+
+  (finalPop, nEvals) <- evalStateT (runAndLogWith scorer cfg logToFile checkpoint) $ mkStdGen seed
 
   -- putStrLn $ pp $ finalPop
 

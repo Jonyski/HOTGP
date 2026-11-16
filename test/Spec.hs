@@ -8,6 +8,7 @@
 import qualified BenchmarkSpec
 import qualified EvolutionSpec
 import qualified GrammarSpec
+import qualified GpuSpec
 import qualified MaxTreeDepthSpec
 import qualified MeasureSpec
 import qualified PrettyTreeSpec
@@ -26,5 +27,8 @@ main =
         testGroup "Benchmark" BenchmarkSpec.tests,
         testGroup "Max tree depth" MaxTreeDepthSpec.tests,
         testGroup "Prettify Tree" PrettyTreeSpec.tests,
-        testGroup "Measure" MeasureSpec.tests
+        testGroup "Measure" MeasureSpec.tests,
+        -- GPU evaluation path: flattened vs interpreted, batched vs serial,
+        -- and the external kernel runner.
+        testGroup "GPU" GpuSpec.tests
       ]

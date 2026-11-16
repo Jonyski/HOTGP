@@ -29,7 +29,7 @@
 -- the last checkpoint instead of starting over. This is what makes long
 -- benchmark runs interruptible.
 
-module Evolution.Run (runAndLog, runEvolution, Individual (_indTree, _fitness)) where
+module Evolution.Run (runAndLog, runAndLogWith, runEvolution, initPop, initPopBatched, serialScorer, Individual (_indTree, _fitness)) where
 
 import Control.Monad (replicateM, when)
 import Control.Monad.State.Strict (get, gets, put)
@@ -61,6 +61,14 @@ import Text.Printf
 -- need to know about CSV files or test sets.
 type LoggingFunction s a = (Maybe s -> UTCTime -> Evaluations -> SortedPop a -> IO s)
 
+-- | Scores a whole population the ordinary way: one tree at a time.
+--
+-- The default scorer for 'runAndLogWith'. It is the same computation
+-- 'initPop' performs, lifted into IO so that a caller can substitute a
+-- batched (GPU) scorer for it without the run loop knowing the difference.
+serialScorer :: (Fitness a) => Config a -> [Tree] -> IO [Individual a]
+serialScorer cfg = pure . map (mkIndividual cfg)
+
 -- | Runs the evolution with the given config.
 --
 -- This is the entry point used by the benchmarks. It
@@ -76,7 +84,27 @@ type LoggingFunction s a = (Maybe s -> UTCTime -> Evaluations -> SortedPop a -> 
 -- file access, state for reproducible randomness ('Evolution.Helpers.hoistState'
 -- moves pure computations between the two).
 runAndLog :: (Show a, Fitness a) => Config a -> LoggingFunction s a -> FilePath -> S.StateT StdGen IO (SortedPop a, Int)
-runAndLog cfg loggingFunction checkpointFilename = do
+runAndLog = runAndLogWith serialScorer
+
+-- | 'runAndLog' with a pluggable initial-population scorer.
+--
+-- All randomness still comes from the same 'StdGen' in the same order, so
+-- the generated trees are identical whichever scorer is used; only the way
+-- the initial population is /scored/ changes. That is what makes the batched
+-- (GPU) path comparable to the serial one: it is an optimisation of the
+-- measurement, not of the search.
+--
+-- The scorer is only consulted when the run starts from scratch - a resumed
+-- checkpoint already carries scored individuals.
+runAndLogWith ::
+  (Show a, Fitness a) =>
+  -- | Scores the trees 'ramped' produced, in order.
+  (Config a -> [Tree] -> IO [Individual a]) ->
+  Config a ->
+  LoggingFunction s a ->
+  FilePath ->
+  S.StateT StdGen IO (SortedPop a, Int)
+runAndLogWith scorer cfg loggingFunction checkpointFilename = do
   hasCheckpoint <- doesCheckpointExist checkpointFilename
   if hasCheckpoint
     then resumeFromCheckpoint
@@ -95,7 +123,9 @@ runAndLog cfg loggingFunction checkpointFilename = do
     startFromScratch = do
       S.liftIO $ putStrLn "STARTING FROM SCRATCH"
       S.liftIO $ hFlush stdout
-      p <- hoistState $ initPop cfg
+      -- Note: the trees are still generated /purely/ in 'St' and only handed
+      -- out for scoring, so the checkpoint's RNG stream is unaffected.
+      p <- initPopBatched scorer cfg
       time <- S.liftIO getCurrentTime
       -- statsCache <- S.liftIO $ loggingFunction Nothing time (length p) p
       S.liftIO $ putStrLn $ show time <> " -\t" <> show (length p) <> "/" <> show (_nEvaluations cfg)
@@ -150,6 +180,25 @@ runEvolution cfg = do
 -- initial population already costs @popSize@ evaluations.
 initPop :: (Fitness a) => Config a -> St (SortedPop a)
 initPop cfg = SL.toSortedList . map (mkIndividual cfg) <$> ramped cfg
+
+-- | 'initPop' with an external scorer.
+--
+-- This is the one place in the engine where a population-sized batch of
+-- evaluations exists: @popSize@ freshly generated trees x @trainCases@ cases.
+-- Everything the steady-state loop does afterwards scores two children at a
+-- time, which is far too little to hand to a GPU (see @GPU.md@).
+--
+-- Generation stays in 'St' (so the RNG stream is untouched); only scoring
+-- moves into IO, where it can be done in one batch.
+initPopBatched ::
+  (Fitness a) =>
+  (Config a -> [Tree] -> IO [Individual a]) ->
+  Config a ->
+  S.StateT StdGen IO (SortedPop a)
+initPopBatched scorer cfg = do
+  trees <- hoistState (ramped cfg)
+  individuals <- S.liftIO (scorer cfg trees)
+  return $ SL.toSortedList individuals
 
 -- | Runs the step of the evolution, known as Steady State Replace.
 --

@@ -20,9 +20,11 @@
 -- 3. it automatically appears in @stack run@'s help text.
 {-# LANGUAGE GADTs #-}
 
-module Benchmark.Problems (runProblem, allProblemIds, searchCxRateProblem, getProblem, Problem (MkProblem)) where
+module Benchmark.Problems (runProblem, runProblemWith, allProblemIds, searchCxRateProblem, getProblem, Problem (MkProblem)) where
 
 import Benchmark.Core
+import Benchmark.Gpu (Backend)
+import Benchmark.Run (runBenchmarkWith)
 import Benchmark.Problems.CollatzNumbers (collatzNumbers)
 import Benchmark.Problems.CompareStringLengths (compareStringLengths)
 import Benchmark.Problems.CountOdds (countOdds)
@@ -116,10 +118,17 @@ allProblemIds = problemId <$> allProblems
 -- Errors on an unknown name - the CLI validates against 'allProblemIds'
 -- first, so reaching this branch means the caller was bypassed.
 runProblem :: FilePath -> Int -> String -> IO ()
-runProblem workDir seed problemName = case getProblem problemName of
+runProblem = runProblemWith Nothing
+
+-- | 'runProblem' with a scoring backend for the initial population.
+--
+-- See 'runBenchmarkWith' in "Benchmark.Run".
+runProblemWith :: Maybe Backend -> FilePath -> Int -> String -> IO ()
+runProblemWith backend workDir seed problemName = case getProblem problemName of
   Nothing -> error "Unknown benchmark name"
-  Just (MkProblem bench) -> do
-    runBenchmark workDir seed bench
+  -- The existential is opened here, so the backend is the only thing the
+  -- caller has to decide; each problem keeps its own fitness type.
+  Just (MkProblem bench) -> runBenchmarkWith backend workDir seed bench
 
 -- | Runs one fold of a crossover-rate sweep on a named problem.
 searchCxRateProblem :: FilePath -> Int -> Int -> String -> IO ()

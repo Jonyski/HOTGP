@@ -60,8 +60,10 @@ makeConfig trainSet bench =
     treeDepth = 15
     -- Total fitness = sum of the metric over every training case.
     -- maybeToResult turns "the program crashed here" into Error, which the
-    -- Semigroup propagates: one crash spoils the whole score.
-    fitness tree = mconcat $ (\(x, y) -> _fitnessMetric bench y <$> maybeToResult (evalTree x tree)) <$> trainSet
+    -- Semigroup propagates: one crash spoils the whole score. The fold itself
+    -- lives in 'outputsFitness' so that the batched evaluator
+    -- ("Benchmark.Gpu") produces exactly the same number.
+    fitness tree = outputsFitness (_fitnessMetric bench) trainSet [evalTree x tree | (x, _) <- trainSet]
 
     -- The grammar slice available to this problem: the allowed constants,
     -- the program's arguments grouped by type, and every operation that can
@@ -73,6 +75,27 @@ makeConfig trainSet bench =
           _arguments = typesToArgMap (_inputTypes bench),
           _operations = operationsFromTypes (S.toList $ _relevantTypes bench)
         }
+
+-- | Aggregates one possibly-crashed output per training case into a fitness.
+--
+-- This is the /only/ place where per-case results become a score. The serial
+-- path feeds it the outputs of 'Grammar.Eval.evalTree'; the batched path
+-- ("Benchmark.Gpu") feeds it the outputs of a flattened program (on the CPU
+-- or on a GPU). Sharing the function is what guarantees that a population
+-- scored in a batch is bit-for-bit identical to one scored one tree at a
+-- time, including the order of floating-point additions and the way a single
+-- crash poisons the whole score.
+outputsFitness ::
+  (Monoid a) =>
+  -- | The benchmark's metric, @expected -> actual -> error@.
+  (Lit -> Lit -> a) ->
+  -- | Training cases (only the expected values are used here).
+  Dataset ->
+  -- | One output per case, in case order.
+  [Maybe Lit] ->
+  Result a
+outputsFitness metric trainSet outputs =
+  mconcat [metric expected <$> maybeToResult produced | (produced, (_, expected)) <- zip outputs trainSet]
 
 -- | Groups operations by the types they can produce.
 --

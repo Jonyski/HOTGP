@@ -9,6 +9,13 @@ copyright: "2023 Matheus Fernandes"
 extra-source-files:
     - README.md
     - ChangeLog.md
+    - GPU.md
+    - cbits/gp_flat_kernel.h
+    - gpu/Makefile
+    - gpu/README.md
+    - gpu/gp_eval.cu
+    - gpu/gp_eval_cpu.cpp
+    - gpu/verify_parity.sh
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
@@ -60,6 +67,24 @@ executables:
             - -O2
         dependencies:
             - hotgp
+
+benchmarks:
+    hotgp-perf:
+        main: Perf.hs
+        source-dirs: bench
+        ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
+            - -O2
+        dependencies:
+            - hotgp
+            - containers
+            - deepseq
+            - directory
+            - mtl
+            - random
+            - sorted-list
 
 tests:
     hotgp-test:
